@@ -1,4 +1,5 @@
 import os
+import glob
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,60 +8,73 @@ from torch.utils.data import Dataset, DataLoader
 from eegnet import EEGNet
 
 class BCIChallengeDataset(Dataset):
-    """
-    Dataset loader for the IEEE DataPort training data.
-    You will need to replace the dummy data generation below with actual
-    loading logic once you extract the dataset.
-    """
     def __init__(self, data_dir, mode="train"):
         self.data_dir = data_dir
         self.mode = mode
         
-        # TODO: Implement actual loading from the downloaded dataset.
-        # Below is placeholder logic generating random valid-shaped arrays.
-        print(f"Loading {mode} dataset from {data_dir}...")
-        
-        # 4 classes: 0=left_hand, 1=right_hand, 2=feet, 3=idle
-        self.samples = 200 # Dummy sample count
-        
-        # Simulating random EEG data. 
-        # Channels might be 29 or 46 in the real dataset. 
-        # We simulate them mixed.
         self.data = []
         self.labels = []
-        for _ in range(self.samples):
-            ch = np.random.choice([29, 46])
-            signal = np.random.randn(2500, ch) # (Time, Channels)
-            label = np.random.randint(0, 4)
-            
-            # PADDING TO 46 CHANNELS
-            # If the signal has 29 channels, pad it to 46
-            if ch == 29:
-                padded_signal = np.zeros((2500, 46))
-                padded_signal[:, :29] = signal
-                signal = padded_signal
-            
-            # Transpose to (Channels, Time) for PyTorch Conv2D
-            signal = signal.T 
-            
-            self.data.append(signal)
-            self.labels.append(label)
-            
+        
+        # Standard BCI event codes
+        # 769: left hand, 770: right hand, 771: feet. 
+        # We assume 780 or 786 is idle/rest for this dataset based on unique codes.
+        # You may need to adjust the 'idle' mapping based on the dataset's official description.
+        event_map = {
+            769: 0, # left_hand
+            770: 1, # right_hand
+            771: 2, # feet
+            780: 3  # idle (assuming 780 is rest/idle)
+        }
+        
+        npz_files = glob.glob(os.path.join(data_dir, "*.npz"))
+        print(f"Found {len(npz_files)} files in {data_dir}. Loading...")
+        
+        for file_path in npz_files:
+            try:
+                d = np.load(file_path, allow_pickle=True)
+                signal = d['signal'] # (Time, Channels)
+                marks = d['MarkOnSignal'] # (num_events, 2) [sample_index, event_code]
+                
+                for mark in marks:
+                    start_idx = int(mark[0])
+                    event_code = int(mark[1])
+                    
+                    if event_code in event_map:
+                        label = event_map[event_code]
+                        end_idx = start_idx + 2500 # 5 seconds at 500Hz
+                        
+                        if end_idx <= signal.shape[0]:
+                            epoch_signal = signal[start_idx:end_idx, :]
+                            ch = epoch_signal.shape[1]
+                            
+                            # Pad 29 channels to 46
+                            if ch == 29:
+                                padded = np.zeros((2500, 46))
+                                padded[:, :29] = epoch_signal
+                                epoch_signal = padded
+                                
+                            # Transpose to (Channels, Time) for PyTorch
+                            epoch_signal = epoch_signal.T
+                            
+                            self.data.append(epoch_signal)
+                            self.labels.append(label)
+            except Exception as e:
+                print(f"Error loading {file_path}: {e}")
+                
         self.data = np.array(self.data, dtype=np.float32)
         self.labels = np.array(self.labels, dtype=np.int64)
+        print(f"Loaded {len(self.data)} total extracted trials.")
         
     def __len__(self):
-        return self.samples
+        return len(self.data)
 
     def __getitem__(self, idx):
-        # We need to add a "channel" dimension for PyTorch Conv2D: (1, Channels, Time)
         x = np.expand_dims(self.data[idx], axis=0) 
         y = self.labels[idx]
         return torch.tensor(x), torch.tensor(y)
 
 def train():
-    # Parameters
-    data_dir = "./path_to_ieee_dataset"
+    data_dir = r"d:\RVCE\Sem 3\MathWorksChallenge\MathWorks\SMPS\train_data"
     batch_size = 16
     epochs = 10
     learning_rate = 1e-3
@@ -68,18 +82,17 @@ def train():
     
     print(f"Using device: {device}")
     
-    # 1. Load Data
     train_dataset = BCIChallengeDataset(data_dir, mode="train")
+    if len(train_dataset) == 0:
+        print("No training data found. Please download the dataset first.")
+        return
+        
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     
-    # 2. Instantiate Model
     model = EEGNet(num_classes=4, channels=46, samples=2500).to(device)
-    
-    # 3. Setup Loss & Optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    # 4. Training Loop
     model.train()
     for epoch in range(epochs):
         running_loss = 0.0
@@ -88,15 +101,9 @@ def train():
         
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
-            
-            # Zero gradients
             optimizer.zero_grad()
-            
-            # Forward
             outputs = model(inputs)
             loss = criterion(outputs, labels)
-            
-            # Backward
             loss.backward()
             optimizer.step()
             
@@ -109,7 +116,6 @@ def train():
         epoch_acc = 100 * correct / total
         print(f"Epoch [{epoch+1}/{epochs}] - Loss: {epoch_loss:.4f} - Acc: {epoch_acc:.2f}%")
         
-    # 5. Save Model
     os.makedirs("models", exist_ok=True)
     save_path = "models/eegnet_model.pth"
     torch.save(model.state_dict(), save_path)
