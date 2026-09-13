@@ -1,0 +1,7 @@
+metric,value
+device_name,Raspberry Pi 4
+latency_per_trial_ms,45
+throughput,22
+model_size_mb,2.5
+quantization_method,INT8
+framework,TensorFlow Lite
