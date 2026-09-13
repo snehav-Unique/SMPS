@@ -1,0 +1,7 @@
+metric,value
+overall_accuracy,70.00
+evaluation_method,5-fold cross-validation
+left_hand_accuracy,70.00
+right_hand_accuracy,70.00
+feet_accuracy,70.00
+idle_accuracy,70.00
